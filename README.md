@@ -1,0 +1,1 @@
+The library has the dependencies listed in `requirements.txt`, additionally you also need to install dolfinx following the [official instructions](https://github.com/FEniCS/dolfinx/blob/main/README.md#installation)

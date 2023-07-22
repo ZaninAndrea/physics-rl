@@ -1,0 +1,8 @@
+tf-agents==0.17.0
+tensorflow==2.13.0
+numpy==1.24.0
+jupyterlab
+matplotlib
+pyglet
+pyvirtualdisplay
+imageio==2.4.0
