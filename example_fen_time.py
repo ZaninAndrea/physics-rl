@@ -1,4 +1,4 @@
-from fen_time import TimeProblem
+from fenics import TimeProblem
 import numpy as np
 import ufl
 from mpi4py import MPI
@@ -44,18 +44,18 @@ problem.set_dt(dt)
 problem.set_initial_condition(lambda x: np.array(0.0 * x[0]))
 problem.set_u_n(u_n)
 
-problem.solve(0.3, gif_path="fen_time.gif")
-
-f = fem.Constant(domain, PETSc.ScalarType(-0.5))
-L = (u_n + dt * f) * v * ufl.dx
-problem.set_L(L)
-
-problem.solve(0.7, gif_path="fen_time.gif")
-
-problem.reset()
 uh = problem.solve(1, gif_path="fen_time.gif")
 
-# Compute total heat
+# f = fem.Constant(domain, PETSc.ScalarType(-0.5))
+# L = (u_n + dt * f) * v * ufl.dx
+# problem.set_L(L)
+
+# problem.solve(0.7, gif_path="fen_time.gif")
+
+# problem.reset()
+# uh = problem.solve(1, gif_path="fen_time.gif")
+
+# # Compute total heat
 heat_local = fem.assemble_scalar(fem.form(uh * ufl.dx))
-heat = np.sqrt(domain.comm.allreduce(heat_local, op=MPI.SUM))
+heat = domain.comm.allreduce(heat_local, op=MPI.SUM)
 print("Total heat: ", heat)

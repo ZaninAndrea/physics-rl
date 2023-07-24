@@ -33,9 +33,13 @@ class TimeProblem:
 
     def set_initial_condition(self, initial_condition):
         self.initial_condition = initial_condition
+        if not self._is_running and self.u_n != None:
+            self.u_n.interpolate(self.initial_condition)
 
     def set_u_n(self, u_n):
         self.u_n = u_n
+        if not self._is_running and self.initial_condition != None:
+            self.u_n.interpolate(self.initial_condition)
 
     def _setup_pyvista(
         self,
@@ -86,11 +90,7 @@ class TimeProblem:
         uh = fem.Function(self._V)
         uh.name = "uh"
 
-        if self.u_n != None and not self._is_running:
-            self.u_n.interpolate(self.initial_condition)
-            uh.interpolate(self.initial_condition)
-            self._is_running = True
-        elif not self._is_running:
+        if not self._is_running:
             uh.interpolate(self.initial_condition)
             self._is_running = True
 

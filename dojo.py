@@ -18,7 +18,7 @@ class Dojo:
         env,
         optimizer=tf.compat.v1.train.AdamOptimizer(learning_rate=0.001),
         td_errors_loss_fn=tf_agents.utils.common.element_wise_squared_loss,
-        log_steps=200,
+        log_steps=10,
         log_dir="tensorboard",
         training_batch_size=64,
     ):
