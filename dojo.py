@@ -116,7 +116,8 @@ class Dojo:
                 print(
                     "step = {0}: loss = {1} return = {2}".format(
                         step, self._train_loss.result(), self._train_return.result()
-                    )
+                    ),
+                    flush=True,
                 )
 
                 self._train_loss.reset_states()

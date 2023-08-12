@@ -1,4 +1,10 @@
 from dojo import Dojo
+from coordinated import (
+    coordinated,
+    stop_coordination,
+    CoordinatedContext,
+    CoordinatedPyEnvironment,
+)
 from tf_agents.environments import suite_gym, tf_py_environment, py_environment
 from tf_agents.networks.q_network import QNetwork
 from tf_agents.specs import array_spec
@@ -14,7 +20,7 @@ from dolfinx import fem, mesh
 
 
 class HeatEnv(py_environment.PyEnvironment):
-    def __init__(self):
+    def __init__(self, comm):
         self._episode_ended = False
         self.steps_count = 0
 
@@ -22,14 +28,12 @@ class HeatEnv(py_environment.PyEnvironment):
         nx, ny = 50, 50
         dt = 0.01
         domain = mesh.create_rectangle(
-            MPI.COMM_WORLD,
+            comm,
             [np.array([-2, -2]), np.array([2, 2])],
             [nx, ny],
             mesh.CellType.triangle,
         )
         V = fem.FunctionSpace(domain, ("CG", 1))
-
-        print("RANK: ", domain.comm.rank)
 
         # Create boundary condition
         fdim = domain.topology.dim - 1
@@ -154,10 +158,14 @@ class HeatEnv(py_environment.PyEnvironment):
             )
 
 
-env = HeatEnv()
-env = tf_py_environment.TFPyEnvironment(env)
+comm = MPI.COMM_WORLD
 
-q_net = QNetwork(env.observation_spec(), env.action_spec())
+with CoordinatedPyEnvironment(comm, HeatEnv(comm)) as env:
+    if comm.Get_rank() == 0:
+        env = tf_py_environment.TFPyEnvironment(env)
 
-dojo = Dojo(q_net, env)
-dojo.train(10000)
+        print("Running on {} processes".format(comm.size), flush=True)
+        q_net = QNetwork(env.observation_spec(), env.action_spec())
+
+        dojo = Dojo(q_net, env)
+        dojo.train(100)

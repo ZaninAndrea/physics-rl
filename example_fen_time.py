@@ -16,7 +16,6 @@ domain = mesh.create_rectangle(
 )
 V = fem.FunctionSpace(domain, ("CG", 1))
 
-
 # Create boundary condition
 fdim = domain.topology.dim - 1
 boundary_facets = mesh.locate_entities_boundary(
@@ -46,16 +45,17 @@ problem.set_u_n(u_n)
 
 uh = problem.solve(1, gif_path="fen_time.gif")
 
-# f = fem.Constant(domain, PETSc.ScalarType(-0.5))
-# L = (u_n + dt * f) * v * ufl.dx
-# problem.set_L(L)
+f = fem.Constant(domain, PETSc.ScalarType(-0.5))
+L = (u_n + dt * f) * v * ufl.dx
+problem.set_L(L)
 
-# problem.solve(0.7, gif_path="fen_time.gif")
+problem.solve(0.7, gif_path="fen_time.gif")
 
-# problem.reset()
-# uh = problem.solve(1, gif_path="fen_time.gif")
+problem.reset()
+uh = problem.solve(1, gif_path="fen_time.gif")
 
 # # Compute total heat
 heat_local = fem.assemble_scalar(fem.form(uh * ufl.dx))
 heat = domain.comm.allreduce(heat_local, op=MPI.SUM)
+
 print("Total heat: ", heat)
