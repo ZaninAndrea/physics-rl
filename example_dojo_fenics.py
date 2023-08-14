@@ -1,9 +1,8 @@
 from dojo import Dojo
 from coordinated import (
-    coordinated,
-    stop_coordination,
-    CoordinatedContext,
+    random,
     CoordinatedPyEnvironment,
+    Coordinator,
 )
 from tf_agents.environments import suite_gym, tf_py_environment, py_environment
 from tf_agents.networks.q_network import QNetwork
@@ -20,7 +19,10 @@ from dolfinx import fem, mesh
 
 
 class HeatEnv(py_environment.PyEnvironment):
-    def __init__(self, comm):
+    def __init__(self, comm, coordinator: Coordinator):
+        self.comm = comm
+        self.broadcast = coordinator.register(self, "HeatEnv")
+
         self._episode_ended = False
         self.steps_count = 0
 
@@ -128,16 +130,23 @@ class HeatEnv(py_environment.PyEnvironment):
             ]
         )
 
-    def _reset(self):
+    def local_reset(self):
         self.problem.reset()
         self.steps_count = 0
         self._episode_ended = False
 
         return ts.restart(self._get_problem_observation())
 
+    def _reset(self):
+        self.broadcast("_reset")
+
+        return self.local_reset()
+
     def _step(self, action):
+        self.broadcast("_step", action)
+
         if self._episode_ended or self.steps_count >= 10:
-            return self.reset()
+            return self.local_reset()
 
         self.steps_count += 1
 
@@ -158,14 +167,15 @@ class HeatEnv(py_environment.PyEnvironment):
             )
 
 
-comm = MPI.COMM_WORLD
+coordinator = Coordinator(MPI.COMM_WORLD)
+env = HeatEnv(MPI.COMM_WORLD, coordinator)
 
-with CoordinatedPyEnvironment(comm, HeatEnv(comm)) as env:
-    if comm.Get_rank() == 0:
+with coordinator:
+    if coordinator.is_leader():
         env = tf_py_environment.TFPyEnvironment(env)
-
-        print("Running on {} processes".format(comm.size), flush=True)
         q_net = QNetwork(env.observation_spec(), env.action_spec())
 
         dojo = Dojo(q_net, env)
+
+        print("Training", flush=True)
         dojo.train(100)

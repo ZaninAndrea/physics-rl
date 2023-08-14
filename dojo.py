@@ -85,10 +85,11 @@ class Dojo:
             num_steps=2,
         ).prefetch(3)
         iterator = iter(dataset)
+
         self.environment.reset()
 
         # Collect enough data to be able to get a batch from training
-        for _ in range(self._training_batch_size):
+        for i in range(self._training_batch_size):
             self._collect_step()
 
         # Run iteration steps of collection and training
