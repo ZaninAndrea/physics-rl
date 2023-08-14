@@ -1,5 +1,4 @@
 from mpi4py import MPI
-from tf_agents.environments import py_environment
 import random as rand
 
 
@@ -11,33 +10,83 @@ def randint(comm, a, b):
     return comm.bcast(rand.randint(a, b), root=0)
 
 
-class Coordinator:
+class Coordinated(object):
+    def register_coordinator(self, coordinator):
+        self.coordinator_registration = coordinator.register(self)
+
+    def get_coordinator_registration(self):
+        return self.coordinator_registration
+
+
+class CoordinatorRegistration(object):
+    def __init__(self, coordinator, namespace):
+        super(CoordinatorRegistration, self).__init__()
+
+        self.coordinator = coordinator
+        self.namespace = namespace
+
+    def broadcast(self, method, *args, **kwargs):
+        self.coordinator.broadcast(self.namespace, method, *args, **kwargs)
+
+    def enter_parallel_block(self):
+        self.coordinator.is_inside_parallel_block = True
+
+    def exit_parallel_block(self):
+        self.coordinator.is_inside_parallel_block = False
+
+    def is_inside_parallel_block(self):
+        return self.coordinator.is_inside_parallel_block
+
+    def is_leader(self):
+        return self.coordinator.is_leader()
+
+    def is_leader_inside_with_statement(self):
+        return self.coordinator.is_leader_inside_with_statement
+
+
+class Coordinator(object):
     def __init__(self, comm):
+        super(Coordinator, self).__init__()
+
         self.comm = comm
         self.objects = {}
+        self.is_inside_parallel_block = False
+        self.is_leader_inside_with_statement = False
+        self.registrationCounter = 0
 
-    def register(self, object, namespace):
+    def register(self, object, namespace=None):
+        if namespace is None:
+            namespace = "object{}".format(self.registrationCounter)
+
         self.objects[namespace] = object
+        self.registrationCounter += 1
 
-        def broadcast(method, *args, **kwargs):
-            if self.comm.rank == 0:
-                self.comm.bcast(
-                    {
-                        "namespace": namespace,
-                        "method": method,
-                        "args": args,
-                        "kwargs": kwargs,
-                    },
-                    root=0,
-                )
+        return CoordinatorRegistration(self, namespace)
 
-        return broadcast
+    def broadcast(self, namespace, method, *args, **kwargs):
+        if not self.is_leader_inside_with_statement:
+            raise Exception(
+                "Broadcast can only be called by the leader node inside a `with coordinator` block"
+            )
+
+        self.comm.bcast(
+            {
+                "namespace": namespace,
+                "method": method,
+                "args": args,
+                "kwargs": kwargs,
+            },
+            root=0,
+        )
 
     def __enter__(self):
+        self.is_leader_inside_with_statement = True
+
         if self.comm.rank != 0:
             while True:
                 command = self.comm.bcast(None, root=0)
                 if command == "stop":
+                    self.is_leader_inside_with_statement = False
                     break
                 else:
                     object = self.objects[command["namespace"]]
@@ -56,52 +105,33 @@ class Coordinator:
     def __exit__(self, *args):
         if self.comm.rank == 0:
             self.comm.bcast("stop", root=0)
+            self.is_leader_inside_with_statement = False
 
     def is_leader(self):
         return self.comm.rank == 0
 
 
-class CoordinatedPyEnvironment(py_environment.PyEnvironment):
-    def __init__(self, comm):
-        super(CoordinatedPyEnvironment, self).__init__()
-        self.comm = comm
+def parallel(func):
+    def wrapper(self, *args, **kwargs):
+        coordinator_registration = self.get_coordinator_registration()
+        if not coordinator_registration.is_leader_inside_with_statement():
+            raise Exception(
+                f"method {func.__name__} is decorated with @parallel so it can only be called by the leader node inside a `with coordinator` block"
+            )
 
-    def __enter__(self):
-        if self.comm.rank != 0:
-            while True:
-                command = self.comm.bcast(None, root=0)
-                if command == "stop":
-                    break
-                else:
-                    method = getattr(self, command["method"])
-                    method(*command["args"], **command["kwargs"])
+        if (
+            coordinator_registration.is_leader()
+            and not coordinator_registration.is_inside_parallel_block()
+        ):
+            coordinator_registration.enter_parallel_block()
 
-            return None
+            coordinator_registration.broadcast(func.__name__, *args, **kwargs)
+            result = func(self, *args, **kwargs)
+
+            coordinator_registration.exit_parallel_block()
+
+            return result
         else:
-            parentObject = self
-            comm = self.comm
+            return func(self, *args, **kwargs)
 
-            class DecoratedClass(py_environment.PyEnvironment):
-                def action_spec(self):
-                    return parentObject.action_spec()
-
-                def observation_spec(self):
-                    return parentObject.observation_spec()
-
-                def _reset(self, *args, **kwargs):
-                    comm.bcast(
-                        {"method": "_reset", "args": args, "kwargs": kwargs}, root=0
-                    )
-                    return parentObject._reset(*args, **kwargs)
-
-                def _step(self, *args, **kwargs):
-                    comm.bcast(
-                        {"method": "_step", "args": args, "kwargs": kwargs}, root=0
-                    )
-                    return parentObject._step(*args, **kwargs)
-
-            return DecoratedClass()
-
-    def __exit__(self, *args):
-        if self.comm.rank == 0:
-            self.comm.bcast("stop", root=0)
+    return wrapper

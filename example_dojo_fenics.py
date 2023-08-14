@@ -1,8 +1,9 @@
 from dojo import Dojo
 from coordinated import (
     random,
-    CoordinatedPyEnvironment,
     Coordinator,
+    Coordinated,
+    parallel,
 )
 from tf_agents.environments import suite_gym, tf_py_environment, py_environment
 from tf_agents.networks.q_network import QNetwork
@@ -18,10 +19,13 @@ from petsc4py import PETSc
 from dolfinx import fem, mesh
 
 
-class HeatEnv(py_environment.PyEnvironment):
+class HeatEnv(
+    py_environment.PyEnvironment,
+    Coordinated,
+):
     def __init__(self, comm, coordinator: Coordinator):
         self.comm = comm
-        self.broadcast = coordinator.register(self, "HeatEnv")
+        self.register_coordinator(coordinator)
 
         self._episode_ended = False
         self.steps_count = 0
@@ -95,6 +99,7 @@ class HeatEnv(py_environment.PyEnvironment):
             shape=(4,), dtype=np.float64, name="observation"
         )
 
+    @parallel
     def _get_problem_observation(self):
         temperature_first_quadrant = self.domain.comm.allreduce(
             fem.assemble_scalar(
@@ -130,23 +135,18 @@ class HeatEnv(py_environment.PyEnvironment):
             ]
         )
 
-    def local_reset(self):
+    @parallel
+    def _reset(self):
         self.problem.reset()
         self.steps_count = 0
         self._episode_ended = False
 
         return ts.restart(self._get_problem_observation())
 
-    def _reset(self):
-        self.broadcast("_reset")
-
-        return self.local_reset()
-
+    @parallel
     def _step(self, action):
-        self.broadcast("_step", action)
-
         if self._episode_ended or self.steps_count >= 10:
-            return self.local_reset()
+            return self.reset()
 
         self.steps_count += 1
 
@@ -177,5 +177,4 @@ with coordinator:
 
         dojo = Dojo(q_net, env)
 
-        print("Training", flush=True)
         dojo.train(100)
