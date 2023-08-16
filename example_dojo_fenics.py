@@ -1,6 +1,6 @@
 from dojo import Dojo
 from coordinated import (
-    random,
+    randint,
     Coordinator,
     Coordinated,
     parallel,
@@ -11,7 +11,7 @@ from tf_agents.specs import array_spec
 from tf_agents.trajectories import time_step as ts
 import numpy as np
 
-from fenics import TimeProblem
+from fenics import TimeProblem, HeatEnvironment
 import numpy as np
 import ufl
 from mpi4py import MPI
@@ -19,56 +19,33 @@ from petsc4py import PETSc
 from dolfinx import fem, mesh
 
 
-class HeatEnv(
-    py_environment.PyEnvironment,
-    Coordinated,
-):
+class Environment(HeatEnvironment):
     def __init__(self, comm, coordinator: Coordinator):
         self.comm = comm
-        self.register_coordinator(coordinator)
 
-        self._episode_ended = False
-        self.steps_count = 0
-
-        # Create mesh and define function space
+        # Setup heat equation parameters
         nx, ny = 50, 50
-        dt = 0.01
         domain = mesh.create_rectangle(
             comm,
             [np.array([-2, -2]), np.array([2, 2])],
             [nx, ny],
             mesh.CellType.triangle,
         )
+
+        dirichlet_bc = PETSc.ScalarType(1)
+        initial_condition = lambda x: np.array(0.0 * x[0])
         V = fem.FunctionSpace(domain, ("CG", 1))
+        source_term = fem.Constant(domain, PETSc.ScalarType(0))
 
-        # Create boundary condition
-        fdim = domain.topology.dim - 1
-        boundary_facets = mesh.locate_entities_boundary(
-            domain, fdim, lambda x: np.full(x.shape[1], True, dtype=bool)
+        super().__init__(
+            coordinator,
+            domain,
+            dirichlet_bc,
+            initial_condition,
+            source_term,
+            function_space=V,
+            dt=0.01,
         )
-        bc = fem.dirichletbc(
-            PETSc.ScalarType(1),
-            fem.locate_dofs_topological(V, fdim, boundary_facets),
-            V,
-        )
-
-        # Define variational problem
-        u_n = fem.Function(V)
-        u_n.name = "u_n"
-
-        u, v = ufl.TrialFunction(V), ufl.TestFunction(V)
-        a = u * v * ufl.dx + dt * ufl.dot(ufl.grad(u), ufl.grad(v)) * ufl.dx
-
-        f = fem.Constant(domain, PETSc.ScalarType(0))
-        L = (u_n + dt * f) * v * ufl.dx
-
-        problem = TimeProblem(domain)
-        problem.set_A(a, [bc])
-        problem.set_L(L)
-        problem.set_dt(dt)
-        problem.set_initial_condition(lambda x: np.array(0.0 * x[0]))
-        problem.set_u_n(u_n)
-        self.problem = problem
 
         # Setup problem observations
         self.first_quadrant = fem.Function(V)
@@ -87,7 +64,9 @@ class HeatEnv(
         self.fourth_quadrant.interpolate(
             lambda x: np.logical_and(x[0] > 0, x[1] < 0).astype(float)
         )
-        self.domain = domain
+
+        self.steps_count = 0
+        self._episode_ended = False
 
     def action_spec(self):
         return array_spec.BoundedArraySpec(
@@ -99,31 +78,18 @@ class HeatEnv(
             shape=(4,), dtype=np.float64, name="observation"
         )
 
-    @parallel
-    def _get_problem_observation(self):
-        temperature_first_quadrant = self.domain.comm.allreduce(
-            fem.assemble_scalar(
-                fem.form(self.problem.u_n * self.first_quadrant * ufl.dx)
-            ),
-            op=MPI.SUM,
+    def get_observation(self):
+        temperature_first_quadrant = self.compute_ufl_form(
+            fem.form(self.u_n() * self.first_quadrant * ufl.dx)
         )
-        temperature_second_quadrant = self.domain.comm.allreduce(
-            fem.assemble_scalar(
-                fem.form(self.problem.u_n * self.second_quadrant * ufl.dx)
-            ),
-            op=MPI.SUM,
+        temperature_second_quadrant = self.compute_ufl_form(
+            fem.form(self.u_n() * self.second_quadrant * ufl.dx)
         )
-        temperature_third_quadrant = self.domain.comm.allreduce(
-            fem.assemble_scalar(
-                fem.form(self.problem.u_n * self.third_quadrant * ufl.dx)
-            ),
-            op=MPI.SUM,
+        temperature_third_quadrant = self.compute_ufl_form(
+            fem.form(self.u_n() * self.third_quadrant * ufl.dx)
         )
-        temperature_fourth_quadrant = self.domain.comm.allreduce(
-            fem.assemble_scalar(
-                fem.form(self.problem.u_n * self.fourth_quadrant * ufl.dx)
-            ),
-            op=MPI.SUM,
+        temperature_fourth_quadrant = self.compute_ufl_form(
+            fem.form(self.u_n() * self.fourth_quadrant * ufl.dx)
         )
 
         return np.array(
@@ -136,12 +102,12 @@ class HeatEnv(
         )
 
     @parallel
-    def _reset(self):
-        self.problem.reset()
+    def handle_reset(self):
         self.steps_count = 0
         self._episode_ended = False
 
-        return ts.restart(self._get_problem_observation())
+        level = randint(self.comm, -5, 5)
+        self.set_initial_condition(lambda x: np.array(0.0 * x[0] + level))
 
     @parallel
     def _step(self, action):
@@ -154,21 +120,20 @@ class HeatEnv(
         if action == 0:
             self._episode_ended = True
         elif action == 1:
-            self.problem.solve(0.1)
+            self.advance_time(0.1)
         else:
             raise ValueError("`action` should be 0 or 1.")
 
         if self._episode_ended or self.steps_count >= 10:
-            reward = np.sum(self._get_problem_observation())
-            return ts.termination(self._get_problem_observation(), reward)
+            observation = self.get_observation()
+            reward = np.sum(observation)
+            return ts.termination(observation, reward)
         else:
-            return ts.transition(
-                self._get_problem_observation(), reward=-0.1, discount=1.0
-            )
+            return ts.transition(self.get_observation(), reward=-0.1, discount=1.0)
 
 
 coordinator = Coordinator(MPI.COMM_WORLD)
-env = HeatEnv(MPI.COMM_WORLD, coordinator)
+env = Environment(MPI.COMM_WORLD, coordinator)
 
 with coordinator:
     if coordinator.is_leader():
