@@ -18,111 +18,14 @@ from mpi4py import MPI
 from petsc4py import PETSc
 from dolfinx import fem, mesh
 from abc import ABC, abstractmethod
+from typing import Any
 
 
-class HeatEnvironment(
-    py_environment.PyEnvironment,
-    Coordinated,
-    ABC,
-):
-    def __init__(
-        self,
-        coordinator: Coordinator,
-        domain,
-        dirichlet_bc,
-        initial_condition,
-        source_term,
-        dt=0.01,
-        function_space=None,
-    ):
-        self.register_coordinator(coordinator)
-
-        self.dt = dt
-        self.domain = domain
-
-        V = function_space
-        if function_space is None:
-            V = fem.FunctionSpace(domain, ("CG", 1))
-        self._V = V
-
-        # Define variational problem
-        self._u, self._v, self._u_n = (
-            ufl.TrialFunction(V),
-            ufl.TestFunction(V),
-            fem.Function(V),
-        )
-        self._u_n.name = "u_n"
-        self._problem = TimeProblem(domain)
-
-        self.set_source_term(source_term)
-        self.set_dirichlet_bc(dirichlet_bc)
-        self.set_initial_condition(initial_condition)
-        self._problem.set_dt(dt)
-        self._problem.set_u_n(self._u_n)
-
-    def problem(self):
-        return self._problem
-
-    def u_n(self):
-        return self._u_n
-
-    def set_initial_condition(self, initial_condition):
-        self._problem.set_initial_condition(initial_condition)
-
-    def set_source_term(self, source_term):
-        L = (self.u_n() + self.dt * source_term) * self._v * ufl.dx
-        self._problem.set_L(L)
-
-    def set_dirichlet_bc(self, dirichlet_bc):
-        # Create boundary condition
-        fdim = self.domain.topology.dim - 1
-        boundary_facets = mesh.locate_entities_boundary(
-            self.domain, fdim, lambda x: np.full(x.shape[1], True, dtype=bool)
-        )
-        bc = fem.dirichletbc(
-            dirichlet_bc,
-            fem.locate_dofs_topological(self._V, fdim, boundary_facets),
-            self._V,
-        )
-
-        # Define variational problem
-        a = (
-            self._u * self._v * ufl.dx
-            + self.dt * ufl.dot(ufl.grad(self._u), ufl.grad(self._v)) * ufl.dx
-        )
-
-        self._problem.set_A(a, [bc])
-
-    @parallel
-    def compute_ufl_form(self, form):
-        return self.domain.comm.allreduce(
-            fem.assemble_scalar(fem.form(form)),
-            op=MPI.SUM,
-        )
-
-    @parallel
-    def advance_time(self, T):
-        self._problem.solve(T)
-
-    # handle_reset can be overridden to implement custom reset behavior.
-    def handle_reset(self):
-        pass
-
-    @parallel
-    def _reset(self):
-        self._problem.reset()
-        self.handle_reset()
-
-        return ts.restart(self.get_observation())
-
-    @abstractmethod
-    def get_observation(self):
-        pass
-
-
+# TimeProblem wraps a fenics variational problem and allows the PDE
+# to be updated during the simulation.
 class TimeProblem:
     def __init__(self, domain):
-        # Create linear solver
+        # Create fenics solver
         self.domain = domain
         self._solver = PETSc.KSP().create(domain.comm)
         self._solver.setType(PETSc.KSP.Type.PREONLY)
@@ -131,6 +34,7 @@ class TimeProblem:
         self.u_n = None
         self._is_running = False
 
+    # Set the bilinear form of the problem
     def set_A(self, a, bcs):
         self._bcs = bcs
 
@@ -140,68 +44,31 @@ class TimeProblem:
         self._A.assemble()
         self._solver.setOperators(self._A)
 
+    # Set the right hand side of the problem
     def set_L(self, L):
         self._linear_form = fem.form(L)
         self._b = fem.petsc.create_vector(self._linear_form)
 
+    # Set the time step of the simulation
     def set_dt(self, dt):
         self.dt = dt
 
+    # Set the initial condition of the problem
     def set_initial_condition(self, initial_condition):
         self.initial_condition = initial_condition
-        # if not self._is_running and self.u_n != None:
-        #     self.u_n.interpolate(self.initial_condition)
 
+    # Set the solution at the current time step
     def set_u_n(self, u_n):
         self.u_n = u_n
         if not self._is_running and self.initial_condition != None:
             self.u_n.interpolate(self.initial_condition)
 
-    def _setup_pyvista(
-        self,
-        uh,
-        gif_path,
-        clim=None,
-        cmap=plt.cm.get_cmap("viridis", 25),
-        scalar_bar_args=dict(
-            title_font_size=25,
-            label_font_size=20,
-            fmt="%.2e",
-            color="black",
-            position_x=0.1,
-            position_y=0.8,
-            width=0.8,
-            height=0.1,
-        ),
-    ):
-        pyvista.start_xvfb()
-
-        grid = pyvista.UnstructuredGrid(*plot.create_vtk_mesh(self._V))
-
-        plotter = pyvista.Plotter()
-        plotter.open_gif(gif_path)
-
-        grid.point_data["uh"] = uh.x.array
-        warped = grid.warp_by_scalar("uh", factor=1)
-
-        if clim is None:
-            clim = [min(uh.x.array), max(uh.x.array)]
-
-        renderer = plotter.add_mesh(
-            warped,
-            show_edges=True,
-            lighting=False,
-            cmap=cmap,
-            scalar_bar_args=scalar_bar_args,
-            clim=clim,
-        )
-
-        return (plotter, grid, renderer)
-
+    # Reset the problem so that it will start from the initial condition again
     def reset(self):
         self._is_running = False
 
-    def solve(self, T, xdmf_output_path=None, gif_path=None):
+    # Solve the problem for T time units
+    def solve(self, T):
         # Setup solution function
         uh = fem.Function(self._V)
         uh.name = "uh"
@@ -210,20 +77,8 @@ class TimeProblem:
             uh.interpolate(self.initial_condition)
             self._is_running = True
 
-        t = 0
-
-        if gif_path != None:
-            plotter, grid, _ = self._setup_pyvista(
-                uh,
-                gif_path,
-            )
-
-        if xdmf_output_path != None:
-            xdmf = io.XDMFFile(self.domain.comm, xdmf_output_path, "w")
-            xdmf.write_mesh(self.domain)
-            xdmf.write_function(uh, t)
-
         # Time loop
+        t = 0
         while t < T:
             t += self.dt
 
@@ -247,21 +102,118 @@ class TimeProblem:
             if self.u_n != None:
                 self.u_n.x.array[:] = uh.x.array
 
-            # Write solution to file
-            if xdmf_output_path != None:
-                xdmf.write_function(uh, t)
-
-            # Update plot
-            if gif_path != None:
-                warped = grid.warp_by_scalar("uh", factor=1)
-                plotter.update_coordinates(warped.points.copy(), render=False)
-                plotter.update_scalars(uh.x.array, render=False)
-                plotter.write_frame()
-
-        if gif_path != None:
-            plotter.close()
-
-        if xdmf_output_path != None:
-            xdmf.close()
-
         return uh
+
+
+# HeatEnvironment is an abstract base class that implements a
+# heat equation environment for reinforcement learning.
+# The PDE defining the environment and the solution can be modified
+# during the simulation to account for interactions with the agent.
+class HeatEnvironment(
+    py_environment.PyEnvironment,
+    Coordinated,
+    ABC,
+):
+    def __init__(
+        self,
+        coordinator: Coordinator,
+        domain: Any,
+        dirichlet_bc: Any,
+        initial_condition: Any,
+        source_term: Any,
+        dt: float = 0.01,
+        V: Any = None,
+    ) -> None:
+        self.register_coordinator(coordinator)
+
+        self.dt = dt
+        self.domain = domain
+
+        if V is None:
+            V = fem.FunctionSpace(domain, ("CG", 1))
+        self._V = V
+
+        # Define variational problem
+        self._u, self._v, self._u_n = (
+            ufl.TrialFunction(V),
+            ufl.TestFunction(V),
+            fem.Function(V),
+        )
+        self._u_n.name = "u_n"
+        self._problem = TimeProblem(domain)
+
+        self.set_source_term(source_term)
+        self.set_dirichlet_bc(dirichlet_bc)
+        self.set_initial_condition(initial_condition)
+        self._problem.set_dt(dt)
+        self._problem.set_u_n(self._u_n)
+
+    # Get the current problem
+    def problem(self) -> TimeProblem:
+        return self._problem
+
+    # Get the current solution
+    def u_n(self) -> Any:
+        return self._u_n
+
+    # Change the initial condition of the problem
+    def set_initial_condition(self, initial_condition: Any) -> None:
+        self._problem.set_initial_condition(initial_condition)
+
+    # Change the source term of the problem
+    def set_source_term(self, source_term: Any):
+        L = (self.u_n() + self.dt * source_term) * self._v * ufl.dx
+        self._problem.set_L(L)
+
+    # Change the Dirichlet boundary condition of the problem
+    def set_dirichlet_bc(self, dirichlet_bc):
+        # Create boundary condition
+        fdim = self.domain.topology.dim - 1
+        boundary_facets = mesh.locate_entities_boundary(
+            self.domain, fdim, lambda x: np.full(x.shape[1], True, dtype=bool)
+        )
+        bc = fem.dirichletbc(
+            dirichlet_bc,
+            fem.locate_dofs_topological(self._V, fdim, boundary_facets),
+            self._V,
+        )
+
+        # Define variational problem
+        a = (
+            self._u * self._v * ufl.dx
+            + self.dt * ufl.dot(ufl.grad(self._u), ufl.grad(self._v)) * ufl.dx
+        )
+
+        self._problem.set_A(a, [bc])
+
+    # Compute the integral of a UFL form over the domain in parallel
+    @parallel
+    def compute_ufl_form(self, form):
+        return self.domain.comm.allreduce(
+            fem.assemble_scalar(fem.form(form)),
+            op=MPI.SUM,
+        )
+
+    # Advance the time by T in the problem
+    @parallel
+    def advance_time(self, T: float) -> None:
+        self._problem.solve(T)
+
+    # handle_reset can be overridden to implement custom reset behavior,
+    # it will be called after the problem is reset, but before
+    # the observation is computed.
+    def handle_reset(self):
+        pass
+
+    # Reset the environment, this method is called automatically be tf-agents
+    @parallel
+    def _reset(self):
+        self._problem.reset()
+        self.handle_reset()
+
+        return ts.restart(self.get_observation())
+
+    # get_observation should be overridden to implement custom observations
+    @abstractmethod
+    def get_observation(self) -> Any:
+        pass

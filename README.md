@@ -1,6 +1,6 @@
 # Setup
 
--   Uninstall MPI if you have already installed it (it may conflict with conda's MPI installation)
+-   Uninstall MPI if you have already installed it (in some cases it conflicts with conda's MPI installation)
 -   Create environment
 
 ```
@@ -14,8 +14,12 @@ conda activate physicsrl
 conda install -c conda-forge fenics-dolfinx mpich pyvista
 ```
 
--   install the other libraries
+-   install the other dependencies
 
 ```
 pip install -r requirements.txt
 ```
+
+# Compatibility
+
+Python 3.9 or more recent is required

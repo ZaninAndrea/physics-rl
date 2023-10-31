@@ -1,51 +1,26 @@
 from mpi4py import MPI
 import random as rand
+from collections.abc import Callable
+from typing import Any, Optional
 
 
+# Generate a random number between 0 and 1 ensuring
+# that all nodes read the same value
 def random(comm):
     return comm.bcast(rand.random(), root=0)
 
 
+# Generate a random integer between a and b ensuring
+# that all nodes read the same value
 def randint(comm, a, b):
     return comm.bcast(rand.randint(a, b), root=0)
 
 
-class Coordinated(object):
-    def register_coordinator(self, coordinator):
-        self.coordinator_registration = coordinator.register(self)
-
-    def get_coordinator_registration(self):
-        return self.coordinator_registration
-
-
-class CoordinatorRegistration(object):
-    def __init__(self, coordinator, namespace):
-        super(CoordinatorRegistration, self).__init__()
-
-        self.coordinator = coordinator
-        self.namespace = namespace
-
-    def broadcast(self, method, *args, **kwargs):
-        self.coordinator.broadcast(self.namespace, method, *args, **kwargs)
-
-    def enter_parallel_block(self):
-        self.coordinator.is_inside_parallel_block = True
-
-    def exit_parallel_block(self):
-        self.coordinator.is_inside_parallel_block = False
-
-    def is_inside_parallel_block(self):
-        return self.coordinator.is_inside_parallel_block
-
-    def is_leader(self):
-        return self.coordinator.is_leader()
-
-    def is_leader_inside_with_statement(self):
-        return self.coordinator.is_leader_inside_with_statement
-
-
+# Coordinator class that manages the registration of objects
+# and the broadcasting of commands to execute methods on
+# registered objects.
 class Coordinator(object):
-    def __init__(self, comm):
+    def __init__(self, comm: Any = MPI.COMM_WORLD) -> None:
         super(Coordinator, self).__init__()
 
         self.comm = comm
@@ -54,16 +29,28 @@ class Coordinator(object):
         self.is_leader_inside_with_statement = False
         self.registrationCounter = 0
 
-    def register(self, object, namespace=None):
+    def MPI_Comm(self) -> Any:
+        return self.comm
+
+    def is_leader(self) -> bool:
+        return self.comm.rank == 0
+
+    # Register an object under a given namespace; if the namespace is not
+    # provided, an incremental counter is used as namespace.
+    # Unless you have different register calls on different nodes, the
+    # default namespace is usually fine.
+    def register(self, object: Any, namespace: Optional[str] = None) -> str:
         if namespace is None:
             namespace = "object{}".format(self.registrationCounter)
 
         self.objects[namespace] = object
         self.registrationCounter += 1
 
-        return CoordinatorRegistration(self, namespace)
+        return namespace
 
-    def broadcast(self, namespace, method, *args, **kwargs):
+    # Broadcast a command to all nodes, the command will be executed by the
+    # object registered under the given namespace on each node.
+    def broadcast(self, namespace: str, method: str, *args: Any, **kwargs: Any) -> None:
         if not self.is_leader_inside_with_statement:
             raise Exception(
                 "Broadcast can only be called by the leader node inside a `with coordinator` block"
@@ -79,7 +66,13 @@ class Coordinator(object):
             root=0,
         )
 
-    def __enter__(self):
+    # Context manager that ensures that while the leader node is executing
+    # the code inside the with statement, the other nodes are waiting for
+    # commands to be broadcasted.
+    # After the with statement is exited by the leader, the other nodes
+    # will enter the with statement, the user should ensure that no
+    # parallel code is executed by the follower nodes.
+    def __enter__(self) -> None:
         self.is_leader_inside_with_statement = True
 
         if self.comm.rank != 0:
@@ -102,36 +95,60 @@ class Coordinator(object):
 
             return None
 
-    def __exit__(self, *args):
+    def __exit__(self, *args: Any) -> None:
         if self.comm.rank == 0:
             self.comm.bcast("stop", root=0)
             self.is_leader_inside_with_statement = False
 
-    def is_leader(self):
-        return self.comm.rank == 0
 
+# Base class that connects to a Coordinator and provides
+# a utilitity to execute methods in parallel across all
+# instances of the class managed by the Coordinator.
+class Coordinated(object):
+    def register_coordinator(
+        self, coordinator: Coordinator, namespace: Optional[str] = None
+    ) -> None:
+        # The registration is not performed in the constructor
+        # to simplify usage in the case of multiple inheritance
+        self.__coordinator = coordinator
+        self.__namespace = coordinator.register(self, namespace=namespace)
+        self.__is_inside_parallel_block = False
 
-def parallel(func):
-    def wrapper(self, *args, **kwargs):
-        coordinator_registration = self.get_coordinator_registration()
-        if not coordinator_registration.is_leader_inside_with_statement():
+    def run_method_in_parallel(self, func: Callable[..., Any], *args, **kwargs) -> Any:
+        if self.__coordinator is None:
+            raise Exception(
+                f"method {func.__name__} is decorated with @parallel so it can only be called after calling `register_coordinator`"
+            )
+        if not self.__coordinator.is_leader_inside_with_statement:
             raise Exception(
                 f"method {func.__name__} is decorated with @parallel so it can only be called by the leader node inside a `with coordinator` block"
             )
 
-        if (
-            coordinator_registration.is_leader()
-            and not coordinator_registration.is_inside_parallel_block()
-        ):
-            coordinator_registration.enter_parallel_block()
+        # The command to execute the method is broadcasted to all nodes
+        # only by the leader node and only if it is not already inside
+        # a parallel block.
+        # This ensures that follower nodes don't rebroadcast the command
+        # and that calls to parallel functions inside parallel functions
+        # are not executed multiple times.
+        if self.__coordinator.is_leader() and not self.__is_inside_parallel_block:
+            self.__is_inside_parallel_block = True
 
-            coordinator_registration.broadcast(func.__name__, *args, **kwargs)
+            self.__coordinator.broadcast(
+                self.__namespace, func.__name__, *args, **kwargs
+            )
             result = func(self, *args, **kwargs)
 
-            coordinator_registration.exit_parallel_block()
+            self.__is_inside_parallel_block = False
 
             return result
         else:
             return func(self, *args, **kwargs)
+
+
+# Function decorator that can be used to transform a method
+# of a class inheriting from Coordinated into a parallel method.
+def parallel(func):
+    def wrapper(self: Coordinated, *args, **kwargs):
+        return self.run_method_in_parallel(func, *args, **kwargs)
 
     return wrapper

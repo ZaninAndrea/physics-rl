@@ -2,31 +2,29 @@ from dojo import Dojo
 from coordinated import (
     randint,
     Coordinator,
-    Coordinated,
     parallel,
 )
-from tf_agents.environments import suite_gym, tf_py_environment, py_environment
+from tf_agents.environments import tf_py_environment
 from tf_agents.networks.q_network import QNetwork
 from tf_agents.specs import array_spec
 from tf_agents.trajectories import time_step as ts
 import numpy as np
 
-from fenics import TimeProblem, HeatEnvironment
+from fenics import HeatEnvironment
 import numpy as np
 import ufl
-from mpi4py import MPI
 from petsc4py import PETSc
 from dolfinx import fem, mesh
 
 
-class Environment(HeatEnvironment):
-    def __init__(self, comm, coordinator: Coordinator):
-        self.comm = comm
+class System(HeatEnvironment):
+    def __init__(self, coordinator: Coordinator):
+        self.comm = coordinator.MPI_Comm()
 
         # Setup heat equation parameters
         nx, ny = 50, 50
         domain = mesh.create_rectangle(
-            comm,
+            self.comm,
             [np.array([-2, -2]), np.array([2, 2])],
             [nx, ny],
             mesh.CellType.triangle,
@@ -43,7 +41,7 @@ class Environment(HeatEnvironment):
             dirichlet_bc,
             initial_condition,
             source_term,
-            function_space=V,
+            V=V,
             dt=0.01,
         )
 
@@ -132,9 +130,10 @@ class Environment(HeatEnvironment):
             return ts.transition(self.get_observation(), reward=-0.1, discount=1.0)
 
 
-coordinator = Coordinator(MPI.COMM_WORLD)
-env = Environment(MPI.COMM_WORLD, coordinator)
-
+# Create the environment and the agent, then
+# train the agent on the environment
+coordinator = Coordinator()
+env = System(coordinator)
 with coordinator:
     if coordinator.is_leader():
         env = tf_py_environment.TFPyEnvironment(env)

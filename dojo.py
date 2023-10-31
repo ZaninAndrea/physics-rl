@@ -11,6 +11,7 @@ from tf_agents.replay_buffers.tf_uniform_replay_buffer import TFUniformReplayBuf
 import datetime
 
 
+# Dojo handles the collection of data and training of an agent
 class Dojo:
     def __init__(
         self,
@@ -51,7 +52,8 @@ class Dojo:
             log_dir + "/" + current_time + "/train"
         )
 
-    # Computes the average return of the current agent
+    # Computes the average return of the current policy by
+    # running num_episodes episodes
     def _avg_return(self, num_episodes=10):
         total_return = 0.0
 
@@ -68,6 +70,7 @@ class Dojo:
         avg_return = total_return / num_episodes
         return avg_return.numpy()[0]
 
+    # Collects a single step of data using the agent's collect policy
     def _collect_step(self):
         time_step = self.environment.current_time_step()
         action_step = self.agent.collect_policy.action(time_step)
@@ -78,6 +81,7 @@ class Dojo:
 
         self.replay_buffer.add_batch(traj)
 
+    # Collect the necessary data and train the agent for the given number of iterations
     def train(self, iterations):
         dataset = self.replay_buffer.as_dataset(
             num_parallel_calls=3,
@@ -97,7 +101,7 @@ class Dojo:
             self._collect_step()
 
             # Sample a batch of data from the buffer and update the agent's network.
-            experience, unused_info = next(iterator)
+            experience, _ = next(iterator)
             train_loss = self.agent.train(experience).loss
 
             # Update the metrics
