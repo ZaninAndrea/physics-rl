@@ -25,6 +25,7 @@ from matplotlib import pyplot as plt
 import matplotlib.pyplot as plt
 from time import sleep
 from random import randint
+from typing import Any, Union, Callable, Optional
 
 
 # MonodomainMitchellSchaeffer is an abstract base class that implements a
@@ -39,9 +40,9 @@ class MonodomainMitchellSchaeffer(
     def __init__(
         self,
         coordinator: Coordinator,
-        domain: Any,
-        initial_condition_u: Any,
-        initial_condition_w: Any,
+        domain: mesh.Mesh,
+        initial_condition_u: Union[Callable, fem.Expression, fem.Function],
+        initial_condition_w: Union[Callable, fem.Expression, fem.Function],
         tau_in: float = 0.3,
         tau_out: float = 6.0,
         tau_open: float = 75.0,
@@ -49,7 +50,7 @@ class MonodomainMitchellSchaeffer(
         u_gate: float = 0.13,
         D: float = 0.013,
         dt: float = 0.01,
-        V: Any = None,
+        V: Optional[fem.FunctionSpace] = None,
     ) -> None:
         self.register_coordinator(coordinator)
 
@@ -94,11 +95,11 @@ class MonodomainMitchellSchaeffer(
         return self._problem
 
     # Get the current transmembrane potential
-    def u_n(self) -> Any:
+    def u_n(self) -> fem.Function:
         return self._u_n
 
     # Get the current gate variable
-    def w_n(self) -> Any:
+    def w_n(self) -> fem.Function:
         return self._w_n
 
     # Reset the gate variable
@@ -107,7 +108,11 @@ class MonodomainMitchellSchaeffer(
         self.compute_right_hand_side()
 
     # Change the initial condition of the problem
-    def set_initial_condition(self, initial_u: Any, initial_w) -> None:
+    def set_initial_condition(
+        self,
+        initial_u: Union[Callable, fem.Expression, fem.Function],
+        initial_w: Union[Callable, fem.Expression, fem.Function],
+    ) -> None:
         self._problem.set_initial_condition(initial_u)
 
         self._initial_condition_w = initial_w

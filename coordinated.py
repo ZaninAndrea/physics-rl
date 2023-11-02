@@ -6,13 +6,13 @@ from typing import Any, Optional
 
 # Generate a random number between 0 and 1 ensuring
 # that all nodes read the same value
-def random(comm):
+def random(comm: MPI.Comm):
     return comm.bcast(rand.random(), root=0)
 
 
 # Generate a random integer between a and b ensuring
 # that all nodes read the same value
-def randint(comm, a, b):
+def randint(comm: MPI.Comm, a: int, b: int):
     return comm.bcast(rand.randint(a, b), root=0)
 
 
@@ -20,7 +20,7 @@ def randint(comm, a, b):
 # and the broadcasting of commands to execute methods on
 # registered objects.
 class Coordinator(object):
-    def __init__(self, comm: Any = MPI.COMM_WORLD) -> None:
+    def __init__(self, comm: MPI.Comm = MPI.COMM_WORLD) -> None:
         super(Coordinator, self).__init__()
 
         self.comm = comm
@@ -29,7 +29,7 @@ class Coordinator(object):
         self.is_leader_inside_with_statement = False
         self.registrationCounter = 0
 
-    def MPI_Comm(self) -> Any:
+    def MPI_Comm(self) -> MPI.Comm:
         return self.comm
 
     def is_leader(self) -> bool:
@@ -147,7 +147,7 @@ class Coordinated(object):
 
 # Function decorator that can be used to transform a method
 # of a class inheriting from Coordinated into a parallel method.
-def parallel(func):
+def parallel(func: Callable):
     def wrapper(self: Coordinated, *args, **kwargs):
         return self.run_method_in_parallel(func, *args, **kwargs)
 
