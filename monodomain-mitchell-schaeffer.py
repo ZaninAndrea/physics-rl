@@ -40,8 +40,8 @@ class MonodomainMitchellSchaeffer(
         self,
         coordinator: Coordinator,
         domain: Any,
-        dirichlet_bc: Any,
-        initial_condition: Any,
+        initial_condition_u: Any,
+        initial_condition_w: Any,
         tau_in: float = 0.3,
         tau_out: float = 6.0,
         tau_open: float = 75.0,
@@ -81,16 +81,11 @@ class MonodomainMitchellSchaeffer(
         self._w_n.name = "w_n"
         self._problem = TimeProblem(domain)
 
+        self._I_app.interpolate(lambda x: x[0] * 0.0)
         self.compute_right_hand_side()
-        self.set_dirichlet_bc(dirichlet_bc)
+        self.set_A()
 
-        def half(x):
-            v = np.array(0.0 * x[0])
-            v[x[0] < 0] = 1
-
-            return v
-
-        self.set_initial_condition(initial_condition, half)
+        self.set_initial_condition(initial_condition_u, initial_condition_w)
         self._problem.set_dt(dt)
         self._problem.set_u_n(self._u_n)
 
@@ -108,29 +103,32 @@ class MonodomainMitchellSchaeffer(
 
     # Reset the gate variable
     def reset_w_n(self) -> None:
-        def half(x):
-            v = np.array(0.0 * x[0])
-            v[x[0] < 0] = 0.5
-
-            return v
-
-        self._w_n.interpolate(half)
+        self._w_n.interpolate(self._initial_condition_w)
         self.compute_right_hand_side()
 
     # Change the initial condition of the problem
     def set_initial_condition(self, initial_u: Any, initial_w) -> None:
         self._problem.set_initial_condition(initial_u)
+
+        self._initial_condition_w = initial_w
         self._w_n.interpolate(initial_w)
 
-    def compute_right_hand_side(self):
+    @parallel
+    def recompute_right_hand_side(self):
+        self.compute_right_hand_side()
+
+    @parallel
+    def set_I_app_intensity(self, intensity) -> None:
         def I_app(x):
             v = np.array(0.0 * x[0])
-            v[np.logical_and(x[1] > 0, np.abs(x[0]) < 5)] = self.intensity
+            v[np.logical_and(x[1] > 0, np.abs(x[0]) < 5)] = intensity
 
             return v
 
         self._I_app.interpolate(I_app)
+        self.compute_right_hand_side()
 
+    def compute_right_hand_side(self):
         J_in = self._w_n * self._u_n * self._u_n * (1 - self._u_n) / self._tau_in
         J_out = -self._u_n / self._tau_out
         L = (self._u_n + self.dt * (J_in + J_out + self._I_app)) * self._v * ufl.dx
@@ -138,18 +136,7 @@ class MonodomainMitchellSchaeffer(
         self._problem.set_L(L)
 
     # Change the Dirichlet boundary condition of the problem
-    def set_dirichlet_bc(self, dirichlet_bc):
-        # Create boundary condition
-        fdim = self.domain.topology.dim - 1
-        boundary_facets = mesh.locate_entities_boundary(
-            self.domain, fdim, lambda x: np.full(x.shape[1], True, dtype=bool)
-        )
-        bc = fem.dirichletbc(
-            dirichlet_bc,
-            fem.locate_dofs_topological(self._V, fdim, boundary_facets),
-            self._V,
-        )
-
+    def set_A(self):
         # Define variational problem
         a = (
             self._u * self._v * ufl.dx
@@ -157,15 +144,6 @@ class MonodomainMitchellSchaeffer(
         )
 
         self._problem.set_A(a, [])
-        # self._problem.set_A(a, [bc])
-
-    # Compute the integral of a UFL form over the domain in parallel
-    @parallel
-    def compute_ufl_form(self, form):
-        return self.domain.comm.allreduce(
-            fem.assemble_scalar(fem.form(form)),
-            op=MPI.SUM,
-        )
 
     # Advance the time by T in the problem
     @parallel
@@ -186,17 +164,12 @@ class MonodomainMitchellSchaeffer(
                 current_w + self.dt * update, self._V.element.interpolation_points()
             )
             self._w_n.interpolate(new_w)
+            self._w_n.x.scatter_forward()
 
             # Update transmembrane potential solving the variational problem
             self._problem.solve(self.dt)
 
             t += self.dt
-
-    # handle_reset can be overridden to implement custom reset behavior,
-    # it will be called after the problem is reset, but before
-    # the observation is computed.
-    def handle_reset(self):
-        pass
 
     # Reset the environment, this method is called automatically be tf-agents
     @parallel
@@ -207,13 +180,15 @@ class MonodomainMitchellSchaeffer(
 
         return ts.restart(self.get_observation())
 
-        # get_observation should be overridden to implement custom observations
-        # @abstractmethod
-        # def get_observation(self) -> Any:
-        #     pass
+
+def half_plane(x):
+    v = np.array(0.0 * x[0])
+    v[x[0] < 0] = np.minimum(-x[0][x[0] < 0] / 20, np.ones_like(x[0][x[0] < 0]))
+
+    return v
 
 
-nx, ny = 200, 200
+nx, ny = 60, 60
 domain = mesh.create_rectangle(
     MPI.COMM_WORLD,
     [np.array([-50, -50]), np.array([50, 50])],
@@ -225,43 +200,47 @@ coordinator = Coordinator()
 env = MonodomainMitchellSchaeffer(
     coordinator,
     domain,
-    PETSc.ScalarType(0),
     lambda x: np.zeros_like(x[0]),
+    half_plane,
     dt=0.03,
 )
+
+show_plot = True
 with coordinator:
     if coordinator.is_leader():
-        u_topology, u_cell_types, u_geometry = plot._(env._V)
+        if show_plot:
+            u_topology, u_cell_types, u_geometry = plot._(env._V)
 
-        u_grid = pyvista.UnstructuredGrid(u_topology, u_cell_types, u_geometry)
-        u_grid.point_data["u"] = env.u_n().x.array.real
-        u_grid.set_active_scalars("u")
+            u_grid = pyvista.UnstructuredGrid(u_topology, u_cell_types, u_geometry)
+            u_grid.point_data["u"] = env.u_n().x.array.real
+            u_grid.set_active_scalars("u")
 
-        w_grid = pyvista.UnstructuredGrid(u_topology, u_cell_types, u_geometry)
-        w_grid.point_data["w"] = env.w_n().x.array.real
-        w_grid.set_active_scalars("w")
+            w_grid = pyvista.UnstructuredGrid(u_topology, u_cell_types, u_geometry)
+            w_grid.point_data["w"] = env.w_n().x.array.real
+            w_grid.set_active_scalars("w")
 
-        u_plotter = pyvista.Plotter()
-        u_plotter.add_mesh(u_grid, show_edges=False, clim=[0, 1])
-        u_plotter.view_xy()
-        u_plotter.show(auto_close=False, interactive_update=True)
+            u_plotter = pyvista.Plotter()
+            u_plotter.add_mesh(u_grid, show_edges=False, clim=[0, 1])
+            u_plotter.view_xy()
+            u_plotter.show(auto_close=False, interactive_update=True)
 
-        w_plotter = pyvista.Plotter()
-        w_plotter.add_mesh(w_grid, show_edges=False, clim=[0, 1])
-        w_plotter.view_xy()
-        w_plotter.show(auto_close=False, interactive_update=True)
+            w_plotter = pyvista.Plotter()
+            w_plotter.add_mesh(w_grid, show_edges=False, clim=[0, 1])
+            w_plotter.view_xy()
+            w_plotter.show(auto_close=False, interactive_update=True)
 
-        for i in range(5000):
+        env.set_I_app_intensity(50)
+
+        for i in range(1000):
             if i == 30:
-                env.intensity = 0
-                env.compute_right_hand_side()
+                env.set_I_app_intensity(0)
 
             env.advance_time(0.5)
-            # sleep(0.1)
             print(i, flush=True)
 
-            # Plot the transmembrane potential
-            u_grid.point_data["u"] = env.u_n().x.array.real
-            w_grid.point_data["w"] = env.w_n().x.array.real
-            u_plotter.update()
-            w_plotter.update()
+            # # Plot the transmembrane potential
+            if show_plot:
+                u_grid.point_data["u"] = env.u_n().x.array.real
+                w_grid.point_data["w"] = env.w_n().x.array.real
+                u_plotter.update()
+                w_plotter.update()
