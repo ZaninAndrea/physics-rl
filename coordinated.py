@@ -6,13 +6,13 @@ from typing import Any, Optional
 
 # Generate a random number between 0 and 1 ensuring
 # that all nodes read the same value
-def random(comm: MPI.Comm):
+def random(comm: MPI.Comm) -> float:
     return comm.bcast(rand.random(), root=0)
 
 
 # Generate a random integer between a and b ensuring
 # that all nodes read the same value
-def randint(comm: MPI.Comm, a: int, b: int):
+def randint(comm: MPI.Comm, a: int, b: int) -> int:
     return comm.bcast(rand.randint(a, b), root=0)
 
 
@@ -25,7 +25,6 @@ class Coordinator(object):
 
         self.comm = comm
         self.objects = {}
-        self.is_inside_parallel_block = False
         self.is_leader_inside_with_statement = False
         self.registrationCounter = 0
 
@@ -100,6 +99,9 @@ class Coordinator(object):
             self.comm.bcast("stop", root=0)
             self.is_leader_inside_with_statement = False
 
+    def is_ready_to_broadcast(self) -> bool:
+        return self.is_leader_inside_with_statement
+
 
 # Base class that connects to a Coordinator and provides
 # a utilitity to execute methods in parallel across all
@@ -119,7 +121,7 @@ class Coordinated(object):
             raise Exception(
                 f"method {func.__name__} is decorated with @parallel so it can only be called after calling `register_coordinator`"
             )
-        if not self.__coordinator.is_leader_inside_with_statement:
+        if not self.__coordinator.is_ready_to_broadcast():
             raise Exception(
                 f"method {func.__name__} is decorated with @parallel so it can only be called by the leader node inside a `with coordinator` block"
             )
@@ -147,7 +149,7 @@ class Coordinated(object):
 
 # Function decorator that can be used to transform a method
 # of a class inheriting from Coordinated into a parallel method.
-def parallel(func: Callable):
+def parallel(func: Callable) -> Callable:
     def wrapper(self: Coordinated, *args, **kwargs):
         return self.run_method_in_parallel(func, *args, **kwargs)
 

@@ -1,27 +1,28 @@
 from __future__ import absolute_import, division, print_function
-import base64
-import IPython
-import matplotlib
-import matplotlib.pyplot as plt
-import numpy as np
 import tensorflow as tf
 import tf_agents
-from tf_agents.agents.dqn import dqn_agent
 from tf_agents.replay_buffers.tf_uniform_replay_buffer import TFUniformReplayBuffer
 import datetime
+from typing import Union, Callable
+
+Tensor = Union[tf.Tensor, tf.SparseTensor, tf.RaggedTensor]
 
 
 # Dojo handles the collection of data and training of an agent
 class Dojo:
     def __init__(
         self,
-        q_network,
-        env,
-        optimizer=tf.compat.v1.train.AdamOptimizer(learning_rate=0.001),
-        td_errors_loss_fn=tf_agents.utils.common.element_wise_squared_loss,
-        log_steps=10,
-        log_dir="tensorboard",
-        training_batch_size=64,
+        q_network: tf_agents.networks.Network,
+        env: tf_agents.environments.PyEnvironment,
+        optimizer: Union[
+            tf.keras.optimizers.Optimizer, tf.compat.v1.train.Optimizer
+        ] = tf.compat.v1.train.AdamOptimizer(learning_rate=0.001),
+        td_errors_loss_fn: Callable[
+            ..., Tensor
+        ] = tf_agents.utils.common.element_wise_squared_loss,
+        log_steps: int = 10,
+        log_dir: str = "tensorboard",
+        training_batch_size: int = 64,
     ):
         self.train_step_counter = tf.Variable(0)
         self.environment = env
@@ -54,7 +55,7 @@ class Dojo:
 
     # Computes the average return of the current policy by
     # running num_episodes episodes
-    def _avg_return(self, num_episodes=10):
+    def _avg_return(self, num_episodes: int = 10):
         total_return = 0.0
 
         for _ in range(num_episodes):
@@ -82,7 +83,7 @@ class Dojo:
         self.replay_buffer.add_batch(traj)
 
     # Collect the necessary data and train the agent for the given number of iterations
-    def train(self, iterations):
+    def train(self, iterations: int):
         dataset = self.replay_buffer.as_dataset(
             num_parallel_calls=3,
             sample_batch_size=self._training_batch_size,

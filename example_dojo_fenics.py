@@ -10,7 +10,7 @@ from tf_agents.specs import array_spec
 from tf_agents.trajectories import time_step as ts
 import numpy as np
 
-from heat_environment import HeatEnvironment
+from fem import HeatEnvironment
 import numpy as np
 import ufl
 from petsc4py import PETSc
