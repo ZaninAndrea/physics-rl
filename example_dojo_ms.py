@@ -19,6 +19,8 @@ import math
 import typing
 
 
+# pentaray_catheter_positions returns the positions of the electrodes
+# of a pentaray catheter with the given distances from the center
 def pentaray_catheter_positions(
     distances: typing.List[float],
 ) -> typing.List[typing.List[float]]:
@@ -43,6 +45,8 @@ SHOCK_INTENSITY = 50
 ACTIVATION_VANISHING_THRESHOLD = 100
 CATHETER_POSITIONS = pentaray_catheter_positions([37.5, 32.5, 17.5, 12.5])
 CATHETER_DISTANCE_DECAY_RATE = 33
+DT = 0.03
+RESOLUTION = 60
 
 
 # half_plane returns a function with half the plane set to 0
@@ -98,7 +102,7 @@ class System(MonodomainMitchellSchaeffer):
         self.comm = coordinator.MPI_Comm()
 
         # Setup equation parameters
-        nx, ny = 60, 60
+        nx, ny = RESOLUTION, RESOLUTION
         domain = mesh.create_rectangle(
             self.comm,
             [np.array([-50, -50]), np.array([50, 50])],
@@ -113,7 +117,7 @@ class System(MonodomainMitchellSchaeffer):
             domain,
             zero,
             half_plane(0),
-            dt=0.03,
+            dt=DT,
         )
 
         # Setup problem observations
@@ -270,6 +274,6 @@ with coordinator:
             env.observation_spec(), env.action_spec(), fc_layer_params=(100, 100)
         )
 
-        dojo = Dojo(q_net, env)
+        dojo = Dojo(q_net, env, log_steps=10)
 
         dojo.train(100)

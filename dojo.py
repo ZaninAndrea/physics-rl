@@ -4,6 +4,9 @@ import tf_agents
 from tf_agents.replay_buffers.tf_uniform_replay_buffer import TFUniformReplayBuffer
 import datetime
 from typing import Union, Callable
+from tf_agents.utils.common import Checkpointer
+from os import path
+from tf_agents.policies import policy_saver
 
 Tensor = Union[tf.Tensor, tf.SparseTensor, tf.RaggedTensor]
 
@@ -22,6 +25,7 @@ class Dojo:
         ] = tf_agents.utils.common.element_wise_squared_loss,
         log_steps: int = 10,
         log_dir: str = "tensorboard",
+        checkpoint_dir: str = "checkpoints",
         training_batch_size: int = 64,
     ):
         self.train_step_counter = tf.Variable(0)
@@ -52,6 +56,22 @@ class Dojo:
         self._train_summary_writer = tf.summary.create_file_writer(
             log_dir + "/" + current_time + "/train"
         )
+
+        # Setup checkpointing
+        if checkpoint_dir is not None:
+            self._checkpointer = Checkpointer(
+                ckpt_dir=path.join(checkpoint_dir, "dojo"),
+                max_to_keep=1,
+                agent=self.agent,
+                policy=self.agent.policy,
+                replay_buffer=self.replay_buffer,
+                global_step=self.train_step_counter,
+            )
+            self._policy_checkpoint_dir = path.join(checkpoint_dir, "policy")
+            self._policy_saver = policy_saver.PolicySaver(self.agent.policy)
+
+        else:
+            self._checkpointer = None
 
     # Computes the average return of the current policy by
     # running num_episodes episodes
@@ -96,17 +116,28 @@ class Dojo:
         # Collect enough data to be able to get a batch from training
         for i in range(self._training_batch_size):
             print(
-                "Collecting data for training: {0}/{1}".format(
-                    i, self._training_batch_size
+                "Collecting initial data: {0}/{1}".format(
+                    i + 1, self._training_batch_size
                 ),
                 flush=True,
+                end="\r",
             )
             self._collect_step()
+        print("Initial data collected")
 
         # Run iteration steps of collection and training
-        for _ in range(iterations):
-            print("Training step: {0}".format(self.train_step_counter.numpy()))
-            self._collect_step()
+        for i in range(iterations):
+            for j in range(self._training_batch_size):
+                print(
+                    "Step {0} - Data collection: {1}/{2}".format(
+                        i + 1, j + 1, self._training_batch_size
+                    ),
+                    flush=True,
+                    end="\r",
+                )
+                self._collect_step()
+
+            print("Step {0} - Training".format(i + 1), flush=True)
 
             # Sample a batch of data from the buffer and update the agent's network.
             experience, _ = next(iterator)
@@ -135,3 +166,8 @@ class Dojo:
 
                 self._train_loss.reset_states()
                 self._train_return.reset_states()
+
+                # Save the agent's network and policy
+                if self._checkpointer is not None:
+                    self._checkpointer.save(step)
+                    self._policy_saver.save(self._policy_checkpoint_dir)
