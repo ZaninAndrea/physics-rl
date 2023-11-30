@@ -1,3 +1,5 @@
+import pyvista
+from dolfinx import plot
 from petsc4py import PETSc
 from dolfinx import fem, mesh
 from typing import Any, Optional, List, Union, Callable
@@ -61,6 +63,7 @@ class TimeProblem:
     # Reset the problem so that it will start from the initial condition again
     def reset(self):
         self._is_running = False
+        self.u_n.interpolate(self.initial_condition)
 
     # Solve the problem for T time units
     def solve(self, T: float):
@@ -220,7 +223,9 @@ class HeatEnvironment(
 # The PDE defining the environment and the solution can be modified
 # during the simulation to account for interactions with the agent.
 class MonodomainMitchellSchaeffer(
+    py_environment.PyEnvironment,
     Coordinated,
+    ABC,
 ):
     def __init__(
         self,
@@ -318,13 +323,33 @@ class MonodomainMitchellSchaeffer(
 
     # Change the Dirichlet boundary condition of the problem
     def set_A(self):
+        # Create boundary condition
+        facets = mesh.locate_entities(
+            self.domain,
+            self.domain.topology.dim,
+            lambda x: np.abs(x[0]) + np.abs(x[1]) <= 12,
+        )
+        bc = fem.dirichletbc(
+            PETSc.ScalarType(0),
+            fem.locate_dofs_topological(self._V, self.domain.topology.dim, facets),
+            self._V,
+        )
+
         # Define variational problem
         a = (
             self._u * self._v * ufl.dx
             + self.dt * self._D * ufl.dot(ufl.grad(self._u), ufl.grad(self._v)) * ufl.dx
         )
 
-        self._problem.set_A(a, [])
+        self._problem.set_A(a, [bc])
+
+    # Compute the integral of a UFL form over the domain in parallel
+    @parallel
+    def compute_ufl_form(self, form: ufl.Form):
+        return self.domain.comm.allreduce(
+            fem.assemble_scalar(fem.form(form)),
+            op=MPI.SUM,
+        )
 
     # Advance the time by T in the problem
     @parallel
@@ -345,18 +370,29 @@ class MonodomainMitchellSchaeffer(
                 current_w + self.dt * update, self._V.element.interpolation_points()
             )
             self._w_n.interpolate(new_w)
-            self._w_n.x.scatter_forward()
 
             # Update transmembrane potential solving the variational problem
             self._problem.solve(self.dt)
 
             t += self.dt
 
-    # Reset the environment, this method is called automatically be tf-agents
-    @parallel
-    def _reset(self):
-        self.reset_w_n()
-        self._problem.reset()
-        self.handle_reset()
+    # get_observation should be overridden to implement custom observations
+    @abstractmethod
+    def get_observation(self) -> Any:
+        pass
 
-        return ts.restart(self.get_observation())
+    def save_u_image(self, image_path: str):
+        if self.domain.comm.rank == 0:
+            print("Saving screenshot", flush=True)
+            u_topology, u_cell_types, u_geometry = plot._(self._V)
+
+            u_grid = pyvista.UnstructuredGrid(u_topology, u_cell_types, u_geometry)
+            u_grid.point_data["u"] = self.u_n().x.array.real
+            u_grid.set_active_scalars("u")
+
+            u_plotter = pyvista.Plotter(off_screen=True)
+            u_plotter.add_mesh(u_grid, show_edges=False, clim=[0, 1])
+            u_plotter.view_xy()
+            u_plotter.window_size = 2000, 2000
+
+            u_plotter.screenshot(image_path)

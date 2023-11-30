@@ -7,6 +7,7 @@ import numpy as np
 from mpi4py import MPI
 from dolfinx import mesh
 from fem import MonodomainMitchellSchaeffer
+from math import floor
 
 
 def half_plane(x):
@@ -16,7 +17,7 @@ def half_plane(x):
     return v
 
 
-nx, ny = 60, 60
+nx, ny = 300, 300
 domain = mesh.create_rectangle(
     MPI.COMM_WORLD,
     [np.array([-50, -50]), np.array([50, 50])],
@@ -51,6 +52,7 @@ with coordinator:
             u_plotter.add_mesh(u_grid, show_edges=False, clim=[0, 1])
             u_plotter.view_xy()
             u_plotter.show(auto_close=False, interactive_update=True)
+            u_plotter.window_size = 2000, 2000
 
             w_plotter = pyvista.Plotter()
             w_plotter.add_mesh(w_grid, show_edges=False, clim=[0, 1])
@@ -65,7 +67,7 @@ with coordinator:
 
         env.set_I_app(I_app)
 
-        for i in range(1000):
+        for i in range(2000):
             if i == 30:
 
                 def I_app(x):
@@ -80,5 +82,8 @@ with coordinator:
             if show_plot:
                 u_grid.point_data["u"] = env.u_n().x.array.real
                 w_grid.point_data["w"] = env.w_n().x.array.real
+                time = floor(i * 0.5)
+                u_plotter.add_title(f"t = {time}")
                 u_plotter.update()
                 w_plotter.update()
+                u_plotter.screenshot(f"./screenshots/{i:05d}.png")
