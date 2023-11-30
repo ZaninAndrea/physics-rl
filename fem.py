@@ -323,25 +323,13 @@ class MonodomainMitchellSchaeffer(
 
     # Change the Dirichlet boundary condition of the problem
     def set_A(self):
-        # Create boundary condition
-        facets = mesh.locate_entities(
-            self.domain,
-            self.domain.topology.dim,
-            lambda x: np.abs(x[0]) + np.abs(x[1]) <= 12,
-        )
-        bc = fem.dirichletbc(
-            PETSc.ScalarType(0),
-            fem.locate_dofs_topological(self._V, self.domain.topology.dim, facets),
-            self._V,
-        )
-
         # Define variational problem
         a = (
             self._u * self._v * ufl.dx
             + self.dt * self._D * ufl.dot(ufl.grad(self._u), ufl.grad(self._v)) * ufl.dx
         )
 
-        self._problem.set_A(a, [bc])
+        self._problem.set_A(a, [])
 
     # Compute the integral of a UFL form over the domain in parallel
     @parallel
@@ -396,3 +384,4 @@ class MonodomainMitchellSchaeffer(
             u_plotter.window_size = 2000, 2000
 
             u_plotter.screenshot(image_path)
+            u_plotter.close()

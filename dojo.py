@@ -95,10 +95,17 @@ class Dojo:
 
         # Collect enough data to be able to get a batch from training
         for i in range(self._training_batch_size):
+            print(
+                "Collecting data for training: {0}/{1}".format(
+                    i, self._training_batch_size
+                ),
+                flush=True,
+            )
             self._collect_step()
 
         # Run iteration steps of collection and training
         for _ in range(iterations):
+            print("Training step: {0}".format(self.train_step_counter.numpy()))
             self._collect_step()
 
             # Sample a batch of data from the buffer and update the agent's network.
