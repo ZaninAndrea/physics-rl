@@ -17,6 +17,10 @@ from petsc4py import PETSc
 from dolfinx import fem, mesh, cpp
 import math
 import typing
+from mpi4py import MPI
+import tensorflow as tf
+
+tf.get_logger().setLevel("ERROR")
 
 
 # pentaray_catheter_positions returns the positions of the electrodes
@@ -269,6 +273,7 @@ coordinator = Coordinator()
 env = System(coordinator)
 with coordinator:
     if coordinator.is_leader():
+        print(f"Running on {MPI.COMM_WORLD.Get_size()} processes", flush=True)
         env = tf_py_environment.TFPyEnvironment(env)
         q_net = QNetwork(
             env.observation_spec(), env.action_spec(), fc_layer_params=(100, 100)

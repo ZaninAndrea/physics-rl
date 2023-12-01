@@ -7,6 +7,7 @@ from typing import Union, Callable
 from tf_agents.utils.common import Checkpointer
 from os import path
 from tf_agents.policies import policy_saver
+import sys
 
 Tensor = Union[tf.Tensor, tf.SparseTensor, tf.RaggedTensor]
 
@@ -123,6 +124,7 @@ class Dojo:
                 end="\r",
             )
             self._collect_step()
+        sys.stdout.write("\033[K")
         print("Initial data collected")
 
         # Run iteration steps of collection and training
@@ -136,7 +138,7 @@ class Dojo:
                     end="\r",
                 )
                 self._collect_step()
-
+            sys.stdout.write("\033[K")
             print("Step {0} - Training".format(i + 1), flush=True)
 
             # Sample a batch of data from the buffer and update the agent's network.
