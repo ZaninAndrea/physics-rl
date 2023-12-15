@@ -19,6 +19,7 @@ import math
 import typing
 from mpi4py import MPI
 import tensorflow as tf
+import random as rand
 
 tf.get_logger().setLevel("ERROR")
 
@@ -153,13 +154,20 @@ class System(MonodomainMitchellSchaeffer):
     def get_total_activation(self):
         return self.compute_ufl_form(fem.form(self.u_n() * ufl.dx))
 
+    def set_seed(self, seed):
+        np.random.seed(seed)
+        rand.seed(seed)
+
     # Reset the environment, this method is called automatically be tf-agents
     @parallel
-    def _reset(self):
+    def _reset(self, seed=None):
         self.steps_count = 0
 
         # Test random initialization until we get a valid one
         while True:
+            if seed is not None:
+                self.set_seed(seed)
+
             # Randomly initialize w
             half_plane_center = (random(self.comm) * 20) - 10
             self.set_initial_condition(zero, half_plane(half_plane_center))
@@ -169,8 +177,8 @@ class System(MonodomainMitchellSchaeffer):
             self._problem.reset()
 
             # Simulate a shock with random width and bottom centered on the w activation
-            width = (random(self.comm) * 3) + 3
-            bottom = random(self.comm) * 30
+            width = (random(self.comm) * 2) + 2
+            bottom = random(self.comm) * 20 + 10
 
             def shock_I_app(x):
                 v = np.array(0.0 * x[0])
@@ -186,14 +194,16 @@ class System(MonodomainMitchellSchaeffer):
             self.advance_time(15)
 
             # Check if the simulation is valid
-            if not math.isnan(self.get_total_activation()):
-                break
-            elif DEBUG:
-                print("Nan detected, retrying...", flush=True)
+            if math.isnan(self.get_total_activation()):
+                if DEBUG:
+                    print("Nan detected, retrying...", flush=True)
+
+                continue
 
             # Stop the shock and simulate the spiral evolution
             self.set_I_app(zero)
             self.advance_time(85)
+            break
 
         if DEBUG:
             self.save_u_image("u.png")
@@ -279,6 +289,11 @@ with coordinator:
             env.observation_spec(), env.action_spec(), fc_layer_params=(100, 100)
         )
 
-        dojo = Dojo(q_net, env, log_steps=10)
+        dojo = Dojo(
+            q_net,
+            env,
+            log_steps=10,
+            validation_seeds=[1, 3, 4, 7, 8, 9, 11, 12, 13, 14],
+        )
 
         dojo.train(100)

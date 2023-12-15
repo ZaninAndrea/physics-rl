@@ -3,7 +3,7 @@ import tensorflow as tf
 import tf_agents
 from tf_agents.replay_buffers.tf_uniform_replay_buffer import TFUniformReplayBuffer
 import datetime
-from typing import Union, Callable
+from typing import Union, Callable, List
 from tf_agents.utils.common import Checkpointer
 from os import path
 from tf_agents.policies import policy_saver
@@ -28,6 +28,8 @@ class Dojo:
         log_dir: str = "tensorboard",
         checkpoint_dir: str = "checkpoints",
         training_batch_size: int = 64,
+        training_rounds_per_step: int = 32,
+        validation_seeds: List[float] = None,
     ):
         self.train_step_counter = tf.Variable(0)
         self.environment = env
@@ -49,6 +51,11 @@ class Dojo:
         # Setup training parameters
         self._log_steps = log_steps
         self._training_batch_size = training_batch_size
+        self._training_rounds_per_step = training_rounds_per_step
+
+        if validation_seeds is not None and len(validation_seeds) != 10:
+            raise "validation_seeds must be a list of 10 seeds"
+        self.validation_seeds = validation_seeds
 
         # Setup tensorboard metrics
         current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -79,7 +86,10 @@ class Dojo:
     def _avg_return(self, num_episodes: int = 10):
         total_return = 0.0
 
-        for _ in range(num_episodes):
+        for i in range(num_episodes):
+            if self.validation_seeds is not None:
+                self.environment.seed(self.validation_seeds[i])
+
             time_step = self.environment.reset()
             episode_return = 0.0
 
@@ -142,11 +152,12 @@ class Dojo:
             print("Step {0} - Training".format(i + 1), flush=True)
 
             # Sample a batch of data from the buffer and update the agent's network.
-            experience, _ = next(iterator)
-            train_loss = self.agent.train(experience).loss
+            for _ in range(self._training_rounds_per_step):
+                experience, _ = next(iterator)
+                train_loss = self.agent.train(experience).loss
 
-            # Update the metrics
-            self._train_loss(train_loss)
+                # Update the metrics
+                self._train_loss(train_loss)
 
             # Log metrics periodically
             step = self.train_step_counter.numpy()
