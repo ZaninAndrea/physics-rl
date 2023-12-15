@@ -29,7 +29,7 @@ class Dojo:
         log_dir: str = "tensorboard",
         checkpoint_dir: str = "checkpoints",
         training_batch_size: int = 64,
-        training_rounds_per_step: int = 32,
+        training_rounds_per_step: int = 256,
         validation_seeds: List[float] = None,
     ):
         self.train_step_counter = tf.Variable(0)
@@ -103,6 +103,9 @@ class Dojo:
                 episode_return += time_step.reward
             total_return += episode_return
 
+        # Reset the seed to a random value
+        rand.seed()
+
         avg_return = total_return / num_episodes
         return avg_return.numpy()[0]
 
@@ -143,6 +146,7 @@ class Dojo:
 
         # Run iteration steps of collection and training
         for i in range(iterations):
+            # Collect data
             for j in range(self._training_batch_size):
                 print(
                     "Step {0} - Data collection: {1}/{2}".format(
@@ -153,19 +157,26 @@ class Dojo:
                 )
                 self._collect_step()
             sys.stdout.write("\033[K")
-            print("Step {0} - Training".format(i + 1), flush=True)
 
             # Sample a batch of data from the buffer and update the agent's network.
-            for _ in range(self._training_rounds_per_step):
+            for j in range(self._training_rounds_per_step):
+                print(
+                    "Step {0} - Model training: {1}/{2}".format(
+                        i + 1, j + 1, self._training_rounds_per_step
+                    ),
+                    flush=True,
+                    end="\r",
+                )
                 experience, _ = next(iterator)
                 train_loss = self.agent.train(experience).loss
 
                 # Update the metrics
                 self._train_loss(train_loss)
+            sys.stdout.write("\n")
 
             # Log metrics periodically
             step = self.train_step_counter.numpy()
-            if step % self._log_steps == 0:
+            if (i + 1) % self._log_steps == 0:
                 # Compute the average return over 10 runs
                 avg_return = self._avg_return()
                 self._train_return(avg_return)
@@ -174,9 +185,10 @@ class Dojo:
                 with self._train_summary_writer.as_default():
                     tf.summary.scalar("loss", self._train_loss.result(), step=step)
                     tf.summary.scalar("return", self._train_return.result(), step=step)
+
                 print(
                     "step = {0}: loss = {1} return = {2}".format(
-                        step, self._train_loss.result(), self._train_return.result()
+                        i, self._train_loss.result(), self._train_return.result()
                     ),
                     flush=True,
                 )

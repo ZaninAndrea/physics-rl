@@ -286,6 +286,8 @@ with coordinator:
             q_net,
             env,
             log_steps=10,
+            training_batch_size=32,
+            training_rounds_per_step=128,
             validation_seeds=[1, 3, 4, 7, 8, 9, 11, 12, 13, 14],
         )
 
