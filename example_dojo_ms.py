@@ -154,20 +154,13 @@ class System(MonodomainMitchellSchaeffer):
     def get_total_activation(self):
         return self.compute_ufl_form(fem.form(self.u_n() * ufl.dx))
 
-    def set_seed(self, seed):
-        np.random.seed(seed)
-        rand.seed(seed)
-
     # Reset the environment, this method is called automatically be tf-agents
     @parallel
-    def _reset(self, seed=None):
+    def _reset(self):
         self.steps_count = 0
 
         # Test random initialization until we get a valid one
         while True:
-            if seed is not None:
-                self.set_seed(seed)
-
             # Randomly initialize w
             half_plane_center = (random(self.comm) * 20) - 10
             self.set_initial_condition(zero, half_plane(half_plane_center))

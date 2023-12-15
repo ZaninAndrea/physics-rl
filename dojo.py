@@ -8,6 +8,7 @@ from tf_agents.utils.common import Checkpointer
 from os import path
 from tf_agents.policies import policy_saver
 import sys
+import random as rand
 
 Tensor = Union[tf.Tensor, tf.SparseTensor, tf.RaggedTensor]
 
@@ -88,7 +89,10 @@ class Dojo:
 
         for i in range(num_episodes):
             if self.validation_seeds is not None:
-                self.environment.seed(self.validation_seeds[i])
+                # It is sufficient setting the seed for the leader process
+                # because the `coordinated.py` random implementation runs
+                # the RNG only on the leader process
+                rand.seed(self.validation_seeds[i])
 
             time_step = self.environment.reset()
             episode_return = 0.0
