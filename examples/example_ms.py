@@ -8,6 +8,7 @@ from mpi4py import MPI
 from dolfinx import mesh
 from fem import MonodomainMitchellSchaeffer
 from math import floor
+import time
 
 
 DT = 0.03
@@ -84,11 +85,24 @@ with coordinator:
         # Enable the stimulus
         env.set_I_app(active_stimulus)
 
+        start_time = 0
+
         for i in range(100):
             print(f"Step {i}", flush=True)
+
+            if i == 1:
+                start_time = time.time()
 
             # At step 30, turn off the stimulus
             if i == 30:
                 env.set_I_app(zero)
 
             env.advance_time(DT)
+
+        end_time = time.time()
+        execution_time = end_time - start_time
+        print(f"Execution time: {execution_time} seconds")
+
+        # Save execution time in a file
+        with open("python_times.txt", "a") as file:
+            file.write(str(execution_time) + "\n")

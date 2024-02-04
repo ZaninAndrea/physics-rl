@@ -321,7 +321,6 @@ class MonodomainMitchellSchaeffer(
 
         self._problem.set_L(L)
 
-    # Change the Dirichlet boundary condition of the problem
     def set_A(self):
         # Define variational problem
         a = (

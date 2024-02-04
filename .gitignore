@@ -4,3 +4,6 @@ tensorboard
 u.png
 monodomain_simulation.mp4
 checkpoints
+dist
+*.egg-info
+build
